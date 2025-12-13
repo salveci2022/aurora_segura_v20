@@ -3,23 +3,28 @@ from flask import Flask, render_template, request, redirect, session, url_for, j
 from pathlib import Path
 import json
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
+# Windows pode não ter base de fusos (tzdata). Tentamos carregar e, se faltar,
+# usamos horário local do sistema.
+try:
+    TZ = ZoneInfo("America/Sao_Paulo")
+except Exception:
+    TZ = None
 BASE_DIR = Path(__file__).resolve().parent
-TEMPLATES_DIR = BASE_DIR / "templates"
-STATIC_DIR = BASE_DIR / "static"
 USERS_FILE = BASE_DIR / "users.json"
 ALERTS_FILE = BASE_DIR / "alerts.log"
 STATE_FILE = BASE_DIR / "state.json"
 
-app = Flask(
-    __name__,
-    template_folder=str(TEMPLATES_DIR),
-    static_folder=str(STATIC_DIR),
-    static_url_path="/static",
-)
-app.secret_key = "aurora_v20_ultra_estavel"
+app = Flask(__name__)
+app.secret_key = "aurora_v21_ultra_estavel"
 
-def _ensure_files():
+def now_br_str() -> str:
+    if TZ is None:
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+def ensure_files():
     if not USERS_FILE.exists():
         USERS_FILE.write_text(json.dumps({
             "admin": {"password": "admin123", "role": "admin", "name": "Admin Aurora"}
@@ -27,20 +32,29 @@ def _ensure_files():
     if not ALERTS_FILE.exists():
         ALERTS_FILE.write_text("", encoding="utf-8")
     if not STATE_FILE.exists():
-        STATE_FILE.write_text(json.dumps({"last_id": 0}, indent=2), encoding="utf-8")
+        STATE_FILE.write_text(json.dumps({"last_id": 0}, indent=2, ensure_ascii=False), encoding="utf-8")
 
-def load_users():
-    _ensure_files()
+def load_users() -> dict:
+    ensure_files()
     try:
-        return json.loads(USERS_FILE.read_text(encoding="utf-8"))
+        data = json.loads(USERS_FILE.read_text(encoding="utf-8"))
     except Exception:
-        return {"admin": {"password": "admin123", "role": "admin", "name": "Admin Aurora"}}
+        data = {}
+    if "admin" not in data:
+        data["admin"] = {"password": "admin123", "role": "admin", "name": "Admin Aurora"}
+    return data
 
-def save_users(data: dict):
+def save_users(data: dict) -> None:
     USERS_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
-def _get_next_alert_id() -> int:
-    _ensure_files()
+def list_trusted_names() -> list[str]:
+    users = load_users()
+    arr = [info.get("name") or u for u, info in users.items() if info.get("role") == "trusted"]
+    arr.sort(key=lambda s: s.lower())
+    return arr
+
+def next_alert_id() -> int:
+    ensure_files()
     try:
         st = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except Exception:
@@ -49,18 +63,18 @@ def _get_next_alert_id() -> int:
     STATE_FILE.write_text(json.dumps(st, indent=2, ensure_ascii=False), encoding="utf-8")
     return st["last_id"]
 
-def log_alert(payload: dict):
-    _ensure_files()
+def log_alert(payload: dict) -> None:
+    ensure_files()
     with ALERTS_FILE.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 def read_last_alert():
-    _ensure_files()
+    ensure_files()
+    txt = ALERTS_FILE.read_text(encoding="utf-8").strip()
+    if not txt:
+        return None
+    lines = [ln for ln in txt.split("\n") if ln.strip()]
     try:
-        txt = ALERTS_FILE.read_text(encoding="utf-8").strip()
-        if not txt:
-            return None
-        lines = [ln for ln in txt.split("\n") if ln.strip()]
         return json.loads(lines[-1])
     except Exception:
         return None
@@ -69,43 +83,43 @@ def read_last_alert():
 def health():
     return jsonify({
         "ok": True,
-        "base": str(BASE_DIR),
-        "css_ok": (STATIC_DIR / "css" / "style.css").exists(),
-        "js_ok": (STATIC_DIR / "js" / "panic.js").exists(),
-        "mp3_ok": (STATIC_DIR / "audio" / "sirene.mp3").exists(),
-        "template_panic_ok": (TEMPLATES_DIR / "panic_button.html").exists(),
-        "template_trusted_ok": (TEMPLATES_DIR / "panel_trusted.html").exists(),
+        "server_time_br": now_br_str(),
+        "tz": "America/Sao_Paulo" if TZ is not None else "LOCAL_SYSTEM_TIME",
+        "css_ok": (BASE_DIR / "static" / "css" / "style.css").exists(),
+        "js_ok": (BASE_DIR / "static" / "js" / "panic.js").exists(),
+        "mp3_ok": (BASE_DIR / "static" / "audio" / "sirene.mp3").exists(),
+        "template_panic_ok": (BASE_DIR / "templates" / "panic_button.html").exists(),
+        "template_trusted_ok": (BASE_DIR / "templates" / "panel_trusted.html").exists(),
         "users_json_ok": USERS_FILE.exists(),
         "alerts_log_ok": ALERTS_FILE.exists(),
     })
 
 @app.get("/")
-def home():
+def index():
     return redirect(url_for("panic_button"))
 
 @app.get("/panic")
 def panic_button():
-    return render_template("panic_button.html")
+    trusted = list_trusted_names()
+    return render_template("panic_button.html", trusted=trusted)
 
 @app.post("/api/send_alert")
-def api_send_alert():
+def send_alert():
     data = request.get_json(silent=True) or {}
-    alert_id = _get_next_alert_id()
     payload = {
-        "id": alert_id,
-        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "id": next_alert_id(),
+        "ts": now_br_str(),
         "name": (data.get("name") or "Não informado"),
         "situation": (data.get("situation") or "Não especificado"),
         "message": (data.get("message") or ""),
         "location": data.get("location"),
     }
     log_alert(payload)
-    return jsonify({"ok": True, "id": alert_id})
+    return jsonify({"ok": True, "id": payload["id"]})
 
 @app.get("/api/last_alert")
-def api_last_alert():
-    last = read_last_alert()
-    return jsonify({"ok": True, "last": last})
+def last_alert():
+    return jsonify({"ok": True, "last": read_last_alert()})
 
 # ===== ADMIN =====
 @app.route("/panel/login", methods=["GET", "POST"])
@@ -141,14 +155,18 @@ def admin_add_trusted():
     name = (request.form.get("trusted_name") or "").strip()
     username = (request.form.get("trusted_user") or "").strip().lower()
     password = (request.form.get("trusted_password") or "").strip()
+
     if not name or not username or not password:
         return redirect("/panel?err=Preencha+nome,+usuario+e+senha")
+
     users = load_users()
     if username in users:
         return redirect("/panel?err=Este+usuario+ja+existe")
+
     trusted_users = [u for u, info in users.items() if info.get("role") == "trusted"]
     if len(trusted_users) >= 3:
         return redirect("/panel?err=Limite+de+3+pessoas+de+confianca+atingido")
+
     users[username] = {"password": password, "role": "trusted", "name": name}
     save_users(users)
     return redirect("/panel?msg=Pessoa+de+confianca+cadastrada")
@@ -193,13 +211,13 @@ def trusted_panel():
         return redirect(url_for("trusted_login"))
     users = load_users()
     u = session.get("trusted")
-    name = users.get(u, {}).get("name") or u
-    return render_template("panel_trusted.html", display_name=name)
+    display_name = users.get(u, {}).get("name") or u
+    return render_template("panel_trusted.html", display_name=display_name)
 
 @app.get("/logout_trusted")
 def logout_trusted():
     session.clear()
-    return redirect(url_for("panic_button"))
+    return redirect(url_for("trusted_login"))
 
 @app.route("/trusted/change_password", methods=["GET", "POST"])
 def trusted_change_password():
@@ -241,5 +259,5 @@ def trusted_recover():
     return render_template("trusted_recover.html", msg=msg, err=err)
 
 if __name__ == "__main__":
-    _ensure_files()
+    ensure_files()
     app.run(host="0.0.0.0", port=5000, debug=True)

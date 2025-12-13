@@ -1,24 +1,24 @@
-# Aurora Mulher Segura — V20 (Ultra-Estável)
+# Aurora Mulher Segura — V21
 
-## Rodar no Windows (CMD)
-1) Extraia o ZIP.
-2) Abra o CMD dentro da pasta `aurora_segura_v20_ULTRA_ESTAVEL`
-3) Instale:
-   pip install -r requirements.txt
-4) Rode:
-   python app.py
+## Rodar local
+pip install -r requirements.txt
+python app.py
+
+## Render Start Command
+gunicorn app:app
 
 ## Links
-- Mulher (Botão de Pânico): http://127.0.0.1:5000/panic
-- Admin (cadastrar confiança): http://127.0.0.1:5000/panel/login
-  - usuário: admin
-  - senha: admin123
-- Pessoa de Confiança (login): http://127.0.0.1:5000/trusted/login
-- Recuperar senha (confiança): http://127.0.0.1:5000/trusted/recover
-- Diagnóstico (CSS/MP3/templates/arquivos): http://127.0.0.1:5000/health
+/panic (mulher)
+/panel/login (admin: admin / admin123)
+/trusted/login (pessoa de confiança)
+/health (diagnóstico)
 
-## Blindagens do V20
-- /panic NÃO trava (localização opcional com timeout e fallback)
-- API de alertas com ID incremental e retorno do último alerta em JSON
-- Painel da confiança toca sirene apenas quando chega alerta NOVO
-- Botão “Ativar som” (Chrome bloqueia autoplay)
+## Mudanças V21
+- Horário Brasil (America/Sao_Paulo) nos alertas
+- Painel da mulher mostra as pessoas de confiança cadastradas
+- Localização só é solicitada se a usuária marcar "Compartilhar localização"
+- Logout da pessoa de confiança volta para o login dela (precisa logar novamente)
+
+
+## Correção V22
+- Corrige erro de fuso no Windows (tzdata). Se necessário, instale com: `pip install tzdata`.

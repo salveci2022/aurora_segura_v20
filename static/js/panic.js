@@ -1,12 +1,11 @@
 (() => {
   const $ = (id) => document.getElementById(id);
-
   const sos = $("sosBtn");
   const statusEl = $("status");
   const nameEl = $("name");
   const msgEl = $("message");
+  const locToggle = $("shareLocation");
   const chips = Array.from(document.querySelectorAll("[data-situation]"));
-
   let holdTimer = null;
   let selectedSituation = "Violência física";
 
@@ -16,6 +15,31 @@
   }
   chips.forEach(c => c.addEventListener("click", () => setSituation(c.dataset.situation)));
   setSituation(selectedSituation);
+
+  async function getLocationOnlyIfAllowed(){
+    if (!locToggle || !locToggle.checked) return null;     // só se marcou
+    if (!navigator.geolocation) return null;
+
+    return await new Promise((resolve) => {
+      let done = false;
+      const finish = (v) => { if (!done){ done = true; resolve(v);} };
+
+      const t = setTimeout(() => finish(null), 3000);
+
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          clearTimeout(t);
+          finish({
+            lat: pos.coords.latitude,
+            lon: pos.coords.longitude,
+            accuracy_m: pos.coords.accuracy
+          });
+        },
+        () => { clearTimeout(t); finish(null); },
+        { enableHighAccuracy: true, timeout: 2800, maximumAge: 10000 }
+      );
+    });
+  }
 
   function startHold(e){
     e.preventDefault();
@@ -29,35 +53,10 @@
     sos.classList.remove("holding");
   }
 
-  async function getLocationBestEffort(){
-    if (!navigator.geolocation) return null;
-
-    return await new Promise((resolve) => {
-      let done = false;
-      const finish = (v) => { if (!done){ done = true; resolve(v);} };
-
-      // hard timeout (nunca trava)
-      const t = setTimeout(() => finish(null), 1800);
-
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          clearTimeout(t);
-          finish({
-            lat: pos.coords.latitude,
-            lon: pos.coords.longitude,
-            accuracy_m: pos.coords.accuracy
-          });
-        },
-        () => { clearTimeout(t); finish(null); },
-        { enableHighAccuracy: true, timeout: 1500, maximumAge: 10000 }
-      );
-    });
-  }
-
   async function sendAlert(){
     try{
       statusEl.textContent = "Enviando alerta...";
-      const location = await getLocationBestEffort();
+      const location = await getLocationOnlyIfAllowed();
 
       const res = await fetch("/api/send_alert", {
         method: "POST",
@@ -89,6 +88,7 @@
   $("btnClear").addEventListener("click", () => {
     nameEl.value = "";
     msgEl.value = "";
+    if (locToggle) locToggle.checked = false;
     setSituation("Violência física");
     statusEl.textContent = "";
   });
