@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Confiança · Painel</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="aurora-bg">
+  <main class="center-wrap">
+    <section class="aurora-card">
+      <div class="topbar">
+        <div class="brand">
+          <div class="brand-dot">♀</div>
+          <div>
+            <div class="brand-title">AURORA_MULHER_SEGURA</div>
+            <div class="brand-sub">Painel da Pessoa de Confiança</div>
+          </div>
+        </div>
+        <div class="top-actions">
+          <a class="pill" href="/trusted/change_password">Senha</a>
+          <a class="pill" href="/logout_trusted">Sair</a>
+        </div>
+      </div>
+
+      <div class="content">
+        <h1 class="h1">CENTRAL SOS</h1>
+        <p class="center muted small">Olá, <strong>{{ display_name }}</strong>. Quando chegar alerta novo, a sirene toca.</p>
+
+        <div class="alert" id="alertBox">
+          <div><strong>Último alerta:</strong></div>
+          <div class="small muted" id="lastMeta">Nenhum alerta ainda.</div>
+          <div class="small" id="pretty"></div>
+        </div>
+
+        <div class="top-actions" style="justify-content:center; margin-top:12px">
+          <button class="pill" id="armBtn" type="button">Ativar som</button>
+          <button class="pill" id="muteBtn" type="button">Silenciar</button>
+          <button class="pill" id="refreshBtn" type="button">Atualizar</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+<script>
+  const siren = new Audio('/static/audio/sirene.mp3');
+  siren.loop = true;
+
+  let armed = false;
+  let muted = false;
+  let lastId = 0;
+
+  const armBtn = document.getElementById('armBtn');
+  const muteBtn = document.getElementById('muteBtn');
+  const refreshBtn = document.getElementById('refreshBtn');
+  const lastMeta = document.getElementById('lastMeta');
+  const pretty = document.getElementById('pretty');
+
+  function escapeHtml(s){
+    return (s||"").toString()
+      .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+  }
+
+  armBtn.addEventListener('click', async () => {
+    try {
+      siren.currentTime = 0;
+      await siren.play();
+      siren.pause();
+      siren.currentTime = 0;
+      armed = true;
+      armBtn.textContent = 'Som ativado ✅';
+    } catch (e) {
+      armBtn.textContent = 'Clique novamente';
+    }
+  });
+
+  muteBtn.addEventListener('click', () => {
+    muted = !muted;
+    if (muted) { try { siren.pause(); siren.currentTime = 0; } catch(e){} }
+    muteBtn.textContent = muted ? 'Ativar alarme' : 'Silenciar';
+  });
+
+  function playSiren(){
+    if (!armed || muted) return;
+    try {
+      siren.currentTime = 0;
+      siren.play().catch(()=>{});
+      setTimeout(() => { try { siren.pause(); siren.currentTime = 0; } catch(e){} }, 10000);
+    } catch(e){}
+  }
+
+  function renderAlert(a){
+    if (!a){
+      lastMeta.textContent = "Nenhum alerta ainda.";
+      pretty.textContent = "";
+      return;
+    }
+    lastMeta.textContent = `ID #${a.id} · ${a.ts}`;
+
+    const name = a.name || "Não informado";
+    const situation = a.situation || "Não especificado";
+    const message = a.message || "";
+    const loc = a.location;
+
+    let locHtml = '<span class="badge">Localização: não disponível</span>';
+    if (loc && typeof loc.lat === "number" && typeof loc.lon === "number"){
+      const lat = loc.lat.toFixed(6);
+      const lon = loc.lon.toFixed(6);
+      const acc = loc.accuracy_m ? Math.round(loc.accuracy_m) + "m" : "—";
+      const maps = `https://www.google.com/maps?q=${lat},${lon}`;
+      locHtml = `
+        <div class="badge">📍 ${lat}, ${lon} · precisão ${acc}</div>
+        <div><a class="link" href="${maps}" target="_blank" rel="noopener">Abrir no mapa</a></div>
+      `;
+    }
+
+    pretty.innerHTML = `
+      <div style="margin-top:10px">
+        <div><strong>Nome:</strong> ${escapeHtml(name)}</div>
+        <div><strong>Situação:</strong> ${escapeHtml(situation)}</div>
+        ${message ? `<div><strong>Mensagem:</strong> ${escapeHtml(message)}</div>` : ""}
+        <div style="margin-top:6px">${locHtml}</div>
+      </div>
+    `;
+  }
+
+  async function tick(){
+    try{
+      const res = await fetch('/api/last_alert?ts=' + Date.now(), {cache:'no-store'});
+      const data = await res.json();
+      if(!data.ok) return;
+
+      const a = data.last;
+      renderAlert(a);
+
+      if (a && a.id && a.id > lastId){
+        lastId = a.id;
+        playSiren();
+      }
+    } catch(e){}
+  }
+
+  refreshBtn.addEventListener('click', tick);
+  setInterval(tick, 2500);
+  tick();
+</script>
+</body>
+</html>
