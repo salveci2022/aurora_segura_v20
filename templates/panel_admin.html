@@ -27,8 +27,12 @@
         <h1 class="h1">CADASTRO</h1>
         <p class="center muted small">Cadastre até 3 pessoas de confiança.</p>
 
-        {% if msg %}<div class="alert alert-ok">{{ msg.replace('+',' ') }}</div>{% endif %}
-        {% if err %}<div class="alert alert-danger">{{ err.replace('+',' ') }}</div>{% endif %}
+        {% if msg %}
+          <div class="alert alert-ok">{{ msg.replace('+',' ') }}</div>
+        {% endif %}
+        {% if err %}
+          <div class="alert alert-danger">{{ err.replace('+',' ') }}</div>
+        {% endif %}
 
         <div class="list">
           {% for u, info in trusted.items() %}
@@ -43,6 +47,7 @@
             </form>
           </div>
           {% endfor %}
+
           {% if trusted|length == 0 %}
             <div class="alert">Nenhuma pessoa cadastrada ainda.</div>
           {% endif %}
@@ -51,18 +56,41 @@
         <form method="post" action="/panel/add_trusted" style="margin-top:14px">
           <label class="label">Nome</label>
           <input class="input" name="trusted_name" placeholder="Ex: Mãe da Ana" required>
+
           <label class="label">Usuário (login)</label>
           <input class="input" name="trusted_user" placeholder="ex: maeana" required>
+
           <label class="label">Senha</label>
           <input class="input" name="trusted_password" placeholder="ex: 1234" required>
+
           <button class="btn btn-primary" type="submit">Cadastrar</button>
         </form>
 
         <div class="center small muted" style="margin-top:10px">
           Pessoa de confiança entra em <span class="badge">/trusted/login</span>
         </div>
+
+        <!-- 🔽 BOTÃO DE RELATÓRIO PDF -->
+        <hr style="margin:16px 0; opacity:.2">
+
+        <div class="center">
+          <button
+            type="button"
+            class="btn btn-primary"
+            onclick="baixarRelatorioPDF()">
+            📄 Baixar Relatório de Ocorrência (PDF)
+          </button>
+        </div>
+
       </div>
     </section>
   </main>
+
+  <!-- FUNÇÃO DO BOTÃO -->
+  <script>
+    function baixarRelatorioPDF() {
+      window.open("/report.pdf", "_blank");
+    }
+  </script>
 </body>
 </html>
