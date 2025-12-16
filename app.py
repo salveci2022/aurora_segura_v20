@@ -1,9 +1,14 @@
 from __future__ import annotations
-from flask import Flask, render_template, request, redirect, session, url_for, jsonify
+from flask import Flask, render_template, request, redirect, session, url_for, jsonify, send_file
 from pathlib import Path
 import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+# PDF
+from io import BytesIO
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
 
 # ================================
 # CONFIGURAÇÕES BÁSICAS
@@ -33,15 +38,23 @@ def now_br_str() -> str:
 
 def ensure_files():
     if not USERS_FILE.exists():
-        USERS_FILE.write_text(json.dumps({
-            "admin": {"password": "admin123", "role": "admin", "name": "Admin Aurora"}
-        }, indent=2, ensure_ascii=False), encoding="utf-8")
+        USERS_FILE.write_text(
+            json.dumps(
+                {"admin": {"password": "admin123", "role": "admin", "name": "Admin Aurora"}},
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
 
     if not ALERTS_FILE.exists():
         ALERTS_FILE.write_text("", encoding="utf-8")
 
     if not STATE_FILE.exists():
-        STATE_FILE.write_text(json.dumps({"last_id": 0}, indent=2, ensure_ascii=False), encoding="utf-8")
+        STATE_FILE.write_text(
+            json.dumps({"last_id": 0}, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
 
 def load_users() -> dict:
@@ -98,18 +111,36 @@ def read_last_alert():
         return None
 
 
+def read_all_alerts() -> list[dict]:
+    """Lê todas as ocorrências do alerts.log"""
+    ensure_files()
+    lines = ALERTS_FILE.read_text(encoding="utf-8").splitlines()
+    alerts: list[dict] = []
+    for ln in lines:
+        ln = (ln or "").strip()
+        if not ln:
+            continue
+        try:
+            alerts.append(json.loads(ln))
+        except Exception:
+            pass
+    return alerts
+
+
 # ================================
 # ROTAS BÁSICAS
 # ================================
 @app.get("/health")
 def health():
-    return jsonify({
-        "ok": True,
-        "server_time_br": now_br_str(),
-        "tz": "America/Sao_Paulo" if TZ else "LOCAL",
-        "users_json_ok": USERS_FILE.exists(),
-        "alerts_log_ok": ALERTS_FILE.exists(),
-    })
+    return jsonify(
+        {
+            "ok": True,
+            "server_time_br": now_br_str(),
+            "tz": "America/Sao_Paulo" if TZ else "LOCAL",
+            "users_json_ok": USERS_FILE.exists(),
+            "alerts_log_ok": ALERTS_FILE.exists(),
+        }
+    )
 
 
 @app.get("/")
@@ -121,6 +152,97 @@ def index():
 def panic_button():
     trusted = list_trusted_names()
     return render_template("panic_button.html", trusted=trusted)
+
+
+# ================================
+# RELATÓRIO PDF (PAINEL DA MULHER)
+# ================================
+@app.get("/report.pdf")
+def report_pdf():
+    """
+    Gera PDF das ocorrências registradas em alerts.log.
+    Ideal para o painel da mulher ter um botão "Baixar Relatório".
+    """
+    alerts = read_all_alerts()
+
+    # mantém leve: últimos 50 (se quiser mais, aumente)
+    alerts = alerts[-50:]
+    alerts = list(reversed(alerts))  # mais recentes primeiro
+
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    w, h = A4
+
+    pdf.setTitle("Relatório de Ocorrências - Aurora Mulher Segura")
+
+    # Cabeçalho
+    pdf.setFont("Helvetica-Bold", 16)
+    pdf.drawString(40, h - 50, "AURORA MULHER SEGURA — SPYNET SECURITY")
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(40, h - 68, "Relatório de Ocorrências (PDF)")
+    pdf.drawString(40, h - 84, f"Gerado em: {now_br_str()}")
+    pdf.line(40, h - 92, w - 40, h - 92)
+
+    y = h - 115
+    pdf.setFont("Helvetica-Bold", 12)
+    pdf.drawString(40, y, "Ocorrências registradas")
+    y -= 18
+
+    pdf.setFont("Helvetica", 10)
+
+    if not alerts:
+        pdf.drawString(40, y, "Nenhuma ocorrência registrada até o momento.")
+    else:
+        for a in alerts:
+            if y < 90:
+                pdf.showPage()
+                y = h - 50
+                pdf.setFont("Helvetica", 10)
+
+            _id = a.get("id", "-")
+            ts = a.get("ts", "-")
+            name = a.get("name", "Não informado")
+            situation = a.get("situation", "Não especificado")
+            msg = (a.get("message") or "").strip()
+            loc = a.get("location")
+
+            pdf.setFont("Helvetica-Bold", 10)
+            pdf.drawString(40, y, f"Ocorrência #{_id} — {ts}")
+            y -= 14
+
+            pdf.setFont("Helvetica", 10)
+            pdf.drawString(48, y, f"Nome: {name}")
+            y -= 12
+            pdf.drawString(48, y, f"Situação: {situation}")
+            y -= 12
+
+            if msg:
+                # corta para não estourar linha
+                pdf.drawString(48, y, f"Mensagem: {msg[:120]}")
+                y -= 12
+
+            if loc:
+                if isinstance(loc, dict):
+                    lat = loc.get("lat") or loc.get("latitude") or "-"
+                    lng = loc.get("lng") or loc.get("longitude") or "-"
+                    pdf.drawString(48, y, f"Localização: {lat}, {lng}")
+                else:
+                    pdf.drawString(48, y, f"Localização: {str(loc)[:120]}")
+                y -= 12
+
+            pdf.line(40, y, w - 40, y)
+            y -= 16
+
+    pdf.showPage()
+    pdf.save()
+    buffer.seek(0)
+
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name="relatorio_ocorrencias_aurora.pdf",
+        mimetype="application/pdf",
+    )
 
 
 # ================================
