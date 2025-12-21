@@ -1,186 +1,306 @@
-from flask import Flask, request, redirect, url_for, render_template_string
+from __future__ import annotations
+from flask import Flask, render_template, request, redirect, session, url_for, jsonify
+from pathlib import Path
+import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+# ================================
+# CONFIGURAÇÕES BÁSICAS
+# ================================
+try:
+    TZ = ZoneInfo("America/Sao_Paulo")
+except Exception:
+    TZ = None
+
+BASE_DIR = Path(__file__).resolve().parent
+USERS_FILE = BASE_DIR / "users.json"
+ALERTS_FILE = BASE_DIR / "alerts.log"
+STATE_FILE = BASE_DIR / "state.json"
 
 app = Flask(__name__)
-app.secret_key = "aurora_v20_secret"
+app.secret_key = "aurora_v21_ultra_estavel"
 
-# --- HTML (tudo embutido para NÃO quebrar no Render) ---
-BASE_CSS = """
-<style>
-  body{font-family:Arial,Helvetica,sans-serif;margin:0;background:#0b1020;color:#fff}
-  .wrap{max-width:980px;margin:0 auto;padding:24px}
-  .card{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:18px;margin:14px 0;backdrop-filter: blur(6px)}
-  .title{font-size:28px;font-weight:800;margin:0 0 6px}
-  .sub{opacity:.85;margin:0 0 14px}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
-  a.btn, button.btn{display:flex;align-items:center;justify-content:center;text-decoration:none;
-    background:#ff2d6f;border:none;color:#fff;padding:14px 16px;border-radius:14px;
-    font-weight:800;cursor:pointer}
-  a.btn.secondary, button.btn.secondary{background:#00c2ff;color:#001018}
-  a.btn.dark{background:#121a33}
-  input, select{width:100%;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,.18);
-    background:#0f1733;color:#fff;outline:none}
-  label{display:block;margin:10px 0 6px;font-weight:700}
-  .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  .tag{display:inline-block;padding:6px 10px;border-radius:999px;background:#121a33;border:1px solid rgba(255,255,255,.12);opacity:.9}
-  .ok{color:#7CFFB2}
-  .warn{color:#FFD37C}
-  .muted{opacity:.8}
-</style>
-"""
 
-HOME_HTML = BASE_CSS + """
-<div class="wrap">
-  <div class="card">
-    <div class="title">Aurora Segura V20</div>
-    <p class="sub">Selecione o painel que deseja acessar.</p>
-    <div class="grid">
-      <a class="btn" href="/panic">🚨 Painel Mulher (Pânico)</a>
-      <a class="btn secondary" href="/trusted">🛡️ Pessoa de Confiança</a>
-      <a class="btn dark" href="/admin">👨‍💼 Painel Admin</a>
-    </div>
-    <p class="muted" style="margin-top:14px">
-      Links oficiais: <span class="tag">/</span> <span class="tag">/panic</span> <span class="tag">/trusted</span> <span class="tag">/admin</span>
-    </p>
-  </div>
-</div>
-"""
+# ================================
+# FUNÇÕES AUXILIARES
+# ================================
+def now_br_str() -> str:
+    if TZ is None:
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
 
-PANIC_HTML = BASE_CSS + """
-<div class="wrap">
-  <div class="card">
-    <div class="title">🚨 Painel de Pânico</div>
-    <p class="sub">Preencha o básico e acione o alerta.</p>
 
-    <form method="post" action="/panic">
-      <div class="row">
-        <div>
-          <label>Nome da vítima</label>
-          <input name="victim_name" placeholder="Ex: Maria" required>
-        </div>
-        <div>
-          <label>Tipo de ocorrência</label>
-          <select name="occurrence" required>
-            <option value="Perseguição">Perseguição</option>
-            <option value="Ameaça">Ameaça</option>
-            <option value="Agressão">Agressão</option>
-            <option value="Suspeita">Suspeita</option>
-            <option value="Outro">Outro</option>
-          </select>
-        </div>
-      </div>
+def ensure_files():
+    if not USERS_FILE.exists():
+        USERS_FILE.write_text(json.dumps({
+            "admin": {"password": "admin123", "role": "admin", "name": "Admin Aurora"}
+        }, indent=2, ensure_ascii=False), encoding="utf-8")
 
-      <label>Mensagem (opcional)</label>
-      <input name="message" placeholder="Ex: estou em risco, preciso de ajuda agora">
+    if not ALERTS_FILE.exists():
+        ALERTS_FILE.write_text("", encoding="utf-8")
 
-      <div class="grid" style="margin-top:12px">
-        <button class="btn" type="submit">🔊 ACIONAR ALERTA</button>
-        <a class="btn dark" href="/">⬅️ Voltar</a>
-      </div>
-    </form>
+    if not STATE_FILE.exists():
+        STATE_FILE.write_text(json.dumps({"last_id": 0}, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    {% if sent %}
-      <p class="ok" style="margin-top:14px;font-weight:800">✅ Alerta registrado com sucesso.</p>
-      <p class="muted">Agora a Pessoa de Confiança pode abrir o painel <span class="tag">/trusted</span> para visualizar o alerta.</p>
-    {% endif %}
-  </div>
-</div>
-"""
 
-TRUSTED_HTML = BASE_CSS + """
-<div class="wrap">
-  <div class="card">
-    <div class="title">🛡️ Painel Pessoa de Confiança</div>
-    <p class="sub">Visualização do último alerta recebido.</p>
+def load_users() -> dict:
+    ensure_files()
+    try:
+        data = json.loads(USERS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        data = {}
 
-    {% if last_alert %}
-      <div class="card">
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-          <span class="tag">Vítima: <b>{{ last_alert["victim_name"] }}</b></span>
-          <span class="tag">Ocorrência: <b>{{ last_alert["occurrence"] }}</b></span>
-          <span class="tag">Status: <b class="warn">ATIVO</b></span>
-        </div>
-        <p style="margin-top:10px" class="muted">
-          Mensagem: <b>{{ last_alert["message"] or "—" }}</b>
-        </p>
-      </div>
+    if "admin" not in data:
+        data["admin"] = {"password": "admin123", "role": "admin", "name": "Admin Aurora"}
 
-      <div class="grid">
-        <a class="btn secondary" href="/trusted?refresh=1">🔄 Atualizar</a>
-        <a class="btn dark" href="/trusted/clear">🧹 Limpar alerta</a>
-        <a class="btn dark" href="/">⬅️ Voltar</a>
-      </div>
-    {% else %}
-      <p class="muted">Nenhum alerta ativo no momento.</p>
-      <div class="grid">
-        <a class="btn secondary" href="/trusted?refresh=1">🔄 Atualizar</a>
-        <a class="btn dark" href="/">⬅️ Voltar</a>
-      </div>
-    {% endif %}
-  </div>
-</div>
-"""
+    return data
 
-ADMIN_HTML = BASE_CSS + """
-<div class="wrap">
-  <div class="card">
-    <div class="title">👨‍💼 Painel Admin</div>
-    <p class="sub">Estado do sistema (último alerta).</p>
 
-    {% if last_alert %}
-      <p class="ok"><b>✅ Existe alerta registrado.</b></p>
-      <div class="card">
-        <p><b>Vítima:</b> {{ last_alert["victim_name"] }}</p>
-        <p><b>Ocorrência:</b> {{ last_alert["occurrence"] }}</p>
-        <p><b>Mensagem:</b> {{ last_alert["message"] or "—" }}</p>
-      </div>
-      <div class="grid">
-        <a class="btn dark" href="/trusted/clear">🧹 Limpar alerta</a>
-        <a class="btn secondary" href="/admin">🔄 Atualizar</a>
-        <a class="btn dark" href="/">⬅️ Voltar</a>
-      </div>
-    {% else %}
-      <p class="muted">Nenhum alerta no momento.</p>
-      <div class="grid">
-        <a class="btn secondary" href="/admin">🔄 Atualizar</a>
-        <a class="btn dark" href="/">⬅️ Voltar</a>
-      </div>
-    {% endif %}
-  </div>
-</div>
-"""
+def save_users(data: dict) -> None:
+    USERS_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
-# --- “banco” simples em memória (serve para validar rotas e painéis) ---
-LAST_ALERT = None
+
+def list_trusted_names() -> list[str]:
+    users = load_users()
+    arr = [info.get("name") or u for u, info in users.items() if info.get("role") == "trusted"]
+    arr.sort(key=lambda s: s.lower())
+    return arr
+
+
+def next_alert_id() -> int:
+    ensure_files()
+    try:
+        st = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        st = {"last_id": 0}
+
+    st["last_id"] = int(st.get("last_id", 0)) + 1
+    STATE_FILE.write_text(json.dumps(st, indent=2, ensure_ascii=False), encoding="utf-8")
+    return st["last_id"]
+
+
+def log_alert(payload: dict) -> None:
+    ensure_files()
+    with ALERTS_FILE.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def read_last_alert():
+    ensure_files()
+    txt = ALERTS_FILE.read_text(encoding="utf-8").strip()
+    if not txt:
+        return None
+    lines = [ln for ln in txt.split("\n") if ln.strip()]
+    try:
+        return json.loads(lines[-1])
+    except Exception:
+        return None
+
+
+# ================================
+# ROTAS BÁSICAS
+# ================================
+@app.get("/health")
+def health():
+    return jsonify({
+        "ok": True,
+        "server_time_br": now_br_str(),
+        "tz": "America/Sao_Paulo" if TZ else "LOCAL",
+        "users_json_ok": USERS_FILE.exists(),
+        "alerts_log_ok": ALERTS_FILE.exists(),
+    })
+
 
 @app.get("/")
-def home():
-    return render_template_string(HOME_HTML)
+def index():
+    return redirect(url_for("panic_button"))
 
-@app.route("/panic", methods=["GET", "POST"])
-def panic():
-    global LAST_ALERT
-    sent = False
+
+@app.get("/panic")
+def panic_button():
+    trusted = list_trusted_names()
+    return render_template("panic_button.html", trusted=trusted)
+
+
+# ================================
+# ALERTAS
+# ================================
+@app.post("/api/send_alert")
+def send_alert():
+    data = request.get_json(silent=True) or {}
+
+    payload = {
+        "id": next_alert_id(),
+        "ts": now_br_str(),
+        "name": data.get("name") or "Não informado",
+        "situation": data.get("situation") or "Não especificado",
+        "message": data.get("message") or "",
+        "location": data.get("location"),
+    }
+
+    log_alert(payload)
+    return jsonify({"ok": True, "id": payload["id"]})
+
+
+@app.get("/api/last_alert")
+def last_alert():
+    return jsonify({"ok": True, "last": read_last_alert()})
+
+
+# ================================
+# ADMIN
+# ================================
+@app.route("/panel/login", methods=["GET", "POST"])
+def admin_login():
+    users = load_users()
+    error = False
+
     if request.method == "POST":
-        victim_name = request.form.get("victim_name", "").strip()
-        occurrence = request.form.get("occurrence", "").strip()
-        message = request.form.get("message", "").strip()
-        LAST_ALERT = {"victim_name": victim_name, "occurrence": occurrence, "message": message}
-        sent = True
-    return render_template_string(PANIC_HTML, sent=sent)
+        u = (request.form.get("user") or "").strip()
+        p = request.form.get("password") or ""
+        info = users.get(u)
 
-@app.get("/trusted")
-def trusted():
-    return render_template_string(TRUSTED_HTML, last_alert=LAST_ALERT)
+        if info and info.get("role") == "admin" and info.get("password") == p:
+            session.clear()
+            session["role"] = "admin"
+            session["user"] = u
+            return redirect(url_for("admin_panel"))
 
-@app.get("/trusted/clear")
-def trusted_clear():
-    global LAST_ALERT
-    LAST_ALERT = None
-    return redirect(url_for("trusted"))
+        error = True
 
+    return render_template("login_admin.html", error=error)
+
+
+@app.get("/panel")
+def admin_panel():
+    if session.get("role") != "admin":
+        return redirect(url_for("admin_login"))
+
+    users = load_users()
+    trusted = {u: info for u, info in users.items() if info.get("role") == "trusted"}
+    msg = request.args.get("msg", "")
+    err = request.args.get("err", "")
+    return render_template("panel_admin.html", trusted=trusted, msg=msg, err=err)
+
+
+@app.post("/panel/add_trusted")
+def admin_add_trusted():
+    if session.get("role") != "admin":
+        return redirect(url_for("admin_login"))
+
+    name = request.form.get("trusted_name", "").strip()
+    username = request.form.get("trusted_user", "").strip().lower()
+    password = request.form.get("trusted_password", "").strip()
+
+    if not name or not username or not password:
+        return redirect("/panel?err=Preencha+todos+os+campos")
+
+    users = load_users()
+
+    if username in users:
+        return redirect("/panel?err=Usuario+ja+existe")
+
+    trusted_users = [u for u, i in users.items() if i.get("role") == "trusted"]
+    if len(trusted_users) >= 3:
+        return redirect("/panel?err=Limite+de+3+pessoas+atingido")
+
+    users[username] = {"password": password, "role": "trusted", "name": name}
+    save_users(users)
+    return redirect("/panel?msg=Pessoa+cadastrada")
+
+
+@app.post("/panel/delete_trusted")
+def admin_delete_trusted():
+    if session.get("role") != "admin":
+        return redirect(url_for("admin_login"))
+
+    username = request.form.get("username", "").strip()
+    users = load_users()
+
+    if username in users and users[username].get("role") == "trusted":
+        users.pop(username)
+        save_users(users)
+        return redirect("/panel?msg=Pessoa+removida")
+
+    return redirect("/panel?err=Erro+ao+remover")
+
+
+@app.get("/logout_admin")
+def logout_admin():
+    session.clear()
+    return redirect(url_for("admin_login"))
+
+
+# ================================
+# ALIASES /admin (CORREÇÃO DO 404)
+# ================================
 @app.get("/admin")
-def admin():
-    return render_template_string(ADMIN_HTML, last_alert=LAST_ALERT)
+def admin_alias():
+    return redirect(url_for("admin_panel"))
 
+
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login_alias():
+    return admin_login()
+
+
+# ================================
+# TRUSTED
+# ================================
+
+# Rota de compatibilidade (como era antes):
+# /trusted -> tela de login (ou painel se já estiver logado)
+@app.route("/trusted", methods=["GET", "POST"])
+def trusted_root():
+    # Se já estiver logado como trusted, vai direto ao painel
+    if session.get("role") == "trusted":
+        return redirect(url_for("trusted_panel"))
+    # Caso contrário, reaproveita a lógica do login
+    return trusted_login()
+
+
+@app.route("/trusted/login", methods=["GET", "POST"])
+def trusted_login():
+    users = load_users()
+    error = False
+
+    if request.method == "POST":
+        u = request.form.get("user", "").strip().lower()
+        p = request.form.get("password", "")
+        info = users.get(u)
+
+        if info and info.get("role") == "trusted" and info.get("password") == p:
+            session.clear()
+            session["role"] = "trusted"
+            session["trusted"] = u
+            return redirect(url_for("trusted_panel"))
+
+        error = True
+
+    return render_template("login_trusted.html", error=error)
+
+
+@app.get("/trusted/panel")
+def trusted_panel():
+    if session.get("role") != "trusted":
+        return redirect(url_for("trusted_login"))
+
+    users = load_users()
+    u = session.get("trusted")
+    display_name = users.get(u, {}).get("name") or u
+    return render_template("panel_trusted.html", display_name=display_name)
+
+
+@app.get("/logout_trusted")
+def logout_trusted():
+    session.clear()
+    return redirect(url_for("trusted_login"))
+
+
+# ================================
+# START
+# ================================
 if __name__ == "__main__":
+    ensure_files()
     app.run(host="0.0.0.0", port=5000, debug=True)
